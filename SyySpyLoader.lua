@@ -7,12 +7,12 @@
     ║                                                      ║
     ║    loadstring(game:HttpGet(                          ║
     ║      "https://raw.githubusercontent.com/             ║
-    ║       itzstxx/NexusSpy/main/src/SyySpyLoader.lua"   ║
+    ║       itzstxx/NexusSpy/main/SyySpyLoader.lua"        ║
     ║    ))()                                              ║
     ╚══════════════════════════════════════════════════════╝
 ]]
 
-local RAW_URL = "https://raw.githubusercontent.com/itzstxx/NexusSpy/main/src/SyyRemoteSpy.lua"
+local RAW_URL = "https://raw.githubusercontent.com/itzstxx/NexusSpy/main/SyyRemoteSpy.lua"
 
 local source do
     local ok, result = pcall(function()
