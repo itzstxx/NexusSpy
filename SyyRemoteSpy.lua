@@ -307,46 +307,67 @@ clrBtn.MouseButton1Click:Connect(function()
     logEntries = {}; logCount = 0; countLbl.Text = "0 logs"
 end)
 
--- ── HOOKING VÍA hookmetamethod __namecall ────────────────────
--- Filtra SOLO RemoteEvent / RemoteFunction con IsA — el 99% de
--- llamadas se saltan en esa línea sin coste.  Funciona en todos
--- los ejecutores móviles (Fluxus, Codex, Delta, etc.).
+-- ── HOOKING INDIVIDUAL POR REMOTE ───────────────────────────
+-- Usa hookfunction() en el método del remote — compatible con
+-- Fluxus, Codex, Delta y demás ejecutores móviles.
+-- Solo corre cuando el juego llama ESE remote específico.
 
+local hookedRemotes = {}  -- [remote] = true
 local lastLog       = {}  -- [remote] = tick() para cooldown
-local hookedRemotes = {}  -- solo para el contador final
 
-pcall(function()
-    local oldNC
-    oldNC = hookmetamethod(game, "__namecall", newcclosure(function(...)
-        local self   = select(1, ...)
-        local method = getnamecallmethod()
+local function hookRemote(remote)
+    if hookedRemotes[remote] then return end
+    hookedRemotes[remote] = true
 
-        -- Saltar inmediatamente si no es un remote — coste casi nulo
-        if not (typeof(self) == "Instance"
-            and (self:IsA("RemoteEvent") or self:IsA("RemoteFunction"))) then
-            return oldNC(...)
+    local path   = remote:GetFullName()
+    local name   = remote.Name
+    local isFunc = remote:IsA("RemoteFunction")
+
+    if not isFunc then
+        -- RemoteEvent → hookear FireServer con hookfunction
+        pcall(function()
+            local orig = hookfunction(remote.FireServer, newcclosure(function(self, ...)
+                local now = tick()
+                if (now - (lastLog[remote] or 0)) >= COOLDOWN then
+                    lastLog[remote] = now
+                    local args = {...}
+                    task.defer(function() addLog(name, path, "FireServer", args) end)
+                end
+                return orig(self, ...)
+            end))
+        end)
+    else
+        -- RemoteFunction → hookear InvokeServer con hookfunction
+        pcall(function()
+            local orig = hookfunction(remote.InvokeServer, newcclosure(function(self, ...)
+                local now = tick()
+                if (now - (lastLog[remote] or 0)) >= COOLDOWN then
+                    lastLog[remote] = now
+                    local args = {...}
+                    task.defer(function() addLog(name, path, "InvokeServer", args) end)
+                end
+                return orig(self, ...)
+            end))
+        end)
+    end
+end
+
+-- Hookear todos los remotes existentes y los que se añadan
+local function scanAndHook(root)
+    for _, obj in ipairs(root:GetDescendants()) do
+        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+            pcall(hookRemote, obj)
         end
+    end
+end
 
-        -- Solo interceptar FireServer / InvokeServer
-        if method ~= "FireServer" and method ~= "InvokeServer" then
-            return oldNC(...)
-        end
+scanAndHook(game)
 
-        -- Cooldown por remote
-        local now = tick()
-        if (now - (lastLog[self] or 0)) >= COOLDOWN then
-            lastLog[self] = now
-            hookedRemotes[self] = true
-            local name = self.Name
-            local path = self:GetFullName()
-            local args = {select(2, ...)}   -- args sin el self
-            task.defer(function()
-                addLog(name, path, method, args)
-            end)
-        end
-
-        return oldNC(...)
-    end))
+-- Detectar nuevos remotes que el juego cree después
+game.DescendantAdded:Connect(function(obj)
+    if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+        task.defer(function() pcall(hookRemote, obj) end)
+    end
 end)
 
 -- ── FAB para reabrir ─────────────────────────────────────────
