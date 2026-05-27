@@ -307,67 +307,50 @@ clrBtn.MouseButton1Click:Connect(function()
     logEntries = {}; logCount = 0; countLbl.Text = "0 logs"
 end)
 
--- ── HOOKING INDIVIDUAL POR REMOTE ───────────────────────────
--- Usa hookfunction() en el método del remote — compatible con
--- Fluxus, Codex, Delta y demás ejecutores móviles.
--- Solo corre cuando el juego llama ESE remote específico.
+-- ── HOOKING VÍA __namecall — guard ultra-agresivo ────────────
+-- Primera línea: comparación de string barata para saltar el 99%
+-- de llamadas sin tocar typeof() ni IsA() (ambos son caros).
+-- Solo entra al bloque costoso cuando method es FireServer/Invoke.
 
-local hookedRemotes = {}  -- [remote] = true
-local lastLog       = {}  -- [remote] = tick() para cooldown
+local lastLog       = {}   -- [remote] = tick() para cooldown
+local hookedRemotes = {}   -- solo para el contador final
 
-local function hookRemote(remote)
-    if hookedRemotes[remote] then return end
-    hookedRemotes[remote] = true
+-- Tabla de los dos métodos que nos interesan — lookup O(1)
+local WATCHED = { FireServer=true, InvokeServer=true }
 
-    local path   = remote:GetFullName()
-    local name   = remote.Name
-    local isFunc = remote:IsA("RemoteFunction")
+pcall(function()
+    local oldNC
+    oldNC = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local method = getnamecallmethod()
 
-    if not isFunc then
-        -- RemoteEvent → hookear FireServer con hookfunction
-        pcall(function()
-            local orig = hookfunction(remote.FireServer, newcclosure(function(self, ...)
-                local now = tick()
-                if (now - (lastLog[remote] or 0)) >= COOLDOWN then
-                    lastLog[remote] = now
-                    local args = {...}
-                    task.defer(function() addLog(name, path, "FireServer", args) end)
-                end
-                return orig(self, ...)
-            end))
+        -- GUARD 1: salida barata — string lookup, sin IsA ni typeof
+        if not WATCHED[method] then return oldNC(self, ...) end
+
+        -- GUARD 2: solo si es un remote (IsA cuesta, pero ya pasó el guard 1)
+        if not rawequal(typeof(self), "Instance") then return oldNC(self, ...) end
+        local ok, isRemote = pcall(function()
+            return self:IsA("RemoteEvent") or self:IsA("RemoteFunction")
         end)
-    else
-        -- RemoteFunction → hookear InvokeServer con hookfunction
-        pcall(function()
-            local orig = hookfunction(remote.InvokeServer, newcclosure(function(self, ...)
-                local now = tick()
-                if (now - (lastLog[remote] or 0)) >= COOLDOWN then
-                    lastLog[remote] = now
-                    local args = {...}
-                    task.defer(function() addLog(name, path, "InvokeServer", args) end)
-                end
-                return orig(self, ...)
-            end))
-        end)
-    end
-end
+        if not ok or not isRemote then return oldNC(self, ...) end
 
--- Hookear todos los remotes existentes y los que se añadan
-local function scanAndHook(root)
-    for _, obj in ipairs(root:GetDescendants()) do
-        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-            pcall(hookRemote, obj)
+        -- GUARD 3: checkcaller — evita loop infinito
+        if checkcaller() then return oldNC(self, ...) end
+
+        -- Cooldown por remote
+        local now = tick()
+        if (now - (lastLog[self] or 0)) >= COOLDOWN then
+            lastLog[self] = now
+            hookedRemotes[self] = true
+            local name = self.Name
+            local path = self:GetFullName()
+            local args = {...}
+            task.defer(function()
+                addLog(name, path, method, args)
+            end)
         end
-    end
-end
 
-scanAndHook(game)
-
--- Detectar nuevos remotes que el juego cree después
-game.DescendantAdded:Connect(function(obj)
-    if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-        task.defer(function() pcall(hookRemote, obj) end)
-    end
+        return oldNC(self, ...)
+    end))
 end)
 
 -- ── FAB para reabrir ─────────────────────────────────────────
