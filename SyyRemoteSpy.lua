@@ -307,65 +307,46 @@ clrBtn.MouseButton1Click:Connect(function()
     logEntries = {}; logCount = 0; countLbl.Text = "0 logs"
 end)
 
--- ── HOOKING INDIVIDUAL POR REMOTE ───────────────────────────
--- En vez de hookear __namecall global (explosivo en móvil),
--- reemplazamos FireServer / InvokeServer de cada remote uno a uno.
--- Mucho más barato: solo corre cuando el juego llama ESE remote.
+-- ── HOOKING VÍA hookmetamethod __namecall ────────────────────
+-- Filtra SOLO RemoteEvent / RemoteFunction con IsA — el 99% de
+-- llamadas se saltan en esa línea sin coste.  Funciona en todos
+-- los ejecutores móviles (Fluxus, Codex, Delta, etc.).
 
-local hookedRemotes = {}  -- [remote] = true
 local lastLog       = {}  -- [remote] = tick() para cooldown
+local hookedRemotes = {}  -- solo para el contador final
 
-local function hookRemote(remote)
-    if hookedRemotes[remote] then return end
-    hookedRemotes[remote] = true
+pcall(function()
+    local oldNC
+    oldNC = hookmetamethod(game, "__namecall", newcclosure(function(...)
+        local self   = select(1, ...)
+        local method = getnamecallmethod()
 
-    local path   = remote:GetFullName()
-    local name   = remote.Name
-    local isFunc = remote:IsA("RemoteFunction")
-
-    if not isFunc then
-        -- RemoteEvent → hookear FireServer
-        local orig = remote.FireServer
-        remote.FireServer = newcclosure(function(self, ...)
-            local now = tick()
-            if (now - (lastLog[remote] or 0)) >= COOLDOWN then
-                lastLog[remote] = now
-                local args = {...}
-                task.defer(function() addLog(name, path, "FireServer", args) end)
-            end
-            return orig(self, ...)
-        end)
-    else
-        -- RemoteFunction → hookear InvokeServer
-        local orig = remote.InvokeServer
-        remote.InvokeServer = newcclosure(function(self, ...)
-            local now = tick()
-            if (now - (lastLog[remote] or 0)) >= COOLDOWN then
-                lastLog[remote] = now
-                local args = {...}
-                task.defer(function() addLog(name, path, "InvokeServer", args) end)
-            end
-            return orig(self, ...)
-        end)
-    end
-end
-
--- Hookear todos los remotes existentes y los que se añadan
-local function scanAndHook(root)
-    for _, obj in ipairs(root:GetDescendants()) do
-        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-            pcall(hookRemote, obj)
+        -- Saltar inmediatamente si no es un remote — coste casi nulo
+        if not (typeof(self) == "Instance"
+            and (self:IsA("RemoteEvent") or self:IsA("RemoteFunction"))) then
+            return oldNC(...)
         end
-    end
-end
 
-scanAndHook(game)
+        -- Solo interceptar FireServer / InvokeServer
+        if method ~= "FireServer" and method ~= "InvokeServer" then
+            return oldNC(...)
+        end
 
--- Detectar nuevos remotes que el juego cree después
-game.DescendantAdded:Connect(function(obj)
-    if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-        task.defer(function() pcall(hookRemote, obj) end)
-    end
+        -- Cooldown por remote
+        local now = tick()
+        if (now - (lastLog[self] or 0)) >= COOLDOWN then
+            lastLog[self] = now
+            hookedRemotes[self] = true
+            local name = self.Name
+            local path = self:GetFullName()
+            local args = {select(2, ...)}   -- args sin el self
+            task.defer(function()
+                addLog(name, path, method, args)
+            end)
+        end
+
+        return oldNC(...)
+    end))
 end)
 
 -- ── FAB para reabrir ─────────────────────────────────────────
@@ -378,9 +359,39 @@ fab.BorderSizePixel = 0; fab.Text = "🔍"
 fab.Font = Enum.Font.GothamBlack; fab.TextSize = isMobile and 22 or 18
 fab.AutoButtonColor = false; fab.ZIndex = 20; fab.Parent = gui
 stroke(fab,C_ACCENT,2)
-fab.MouseButton1Click:Connect(function()
-    main.Visible = not main.Visible
-end)
+do
+    local fabDrag, fabDragStart, fabStartPos = false, nil, nil
+    local fabMoved = false
+    fab.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            fabDrag = true; fabMoved = false
+            fabDragStart = inp.Position; fabStartPos = fab.Position
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(inp)
+        if fabDrag and (inp.UserInputType == Enum.UserInputType.MouseMovement
+        or inp.UserInputType == Enum.UserInputType.Touch) then
+            local delta = inp.Position - fabDragStart
+            if delta.Magnitude > 6 then fabMoved = true end
+            if fabMoved then
+                local sc = gui.AbsoluteSize
+                local nx = math.clamp(fabStartPos.X.Offset + delta.X, 4, sc.X - fabSz - 4)
+                local ny = math.clamp(fabStartPos.Y.Offset + delta.Y, 4, sc.Y - fabSz - 4)
+                fab.Position = UDim2.new(0, nx, 0, ny)
+            end
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            if fabDrag and not fabMoved then
+                main.Visible = not main.Visible
+            end
+            fabDrag = false; fabMoved = false
+        end
+    end)
+end
 
 local hookedCount = 0
 for _ in pairs(hookedRemotes) do hookedCount = hookedCount + 1 end
