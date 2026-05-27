@@ -382,4 +382,6 @@ fab.MouseButton1Click:Connect(function()
     main.Visible = not main.Visible
 end)
 
-print("[SYY Spy] Remote Spy cargado — hooks activos en "..#(function()local t={}; for r in pairs(hookedRemotes) do t[#t+1]=r end; return t end()).." remotes")
+local hookedCount = 0
+for _ in pairs(hookedRemotes) do hookedCount = hookedCount + 1 end
+print("[SYY Spy] Remote Spy cargado - hooks activos en "..hookedCount.." remotes")
